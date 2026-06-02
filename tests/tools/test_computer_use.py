@@ -108,11 +108,18 @@ class TestRegistration:
         assert entry.toolset == "computer_use"
         assert entry.schema["name"] == "computer_use"
 
-    def test_check_fn_is_false_on_linux(self):
+    def test_check_fn_matches_platform(self):
         import tools.computer_use_tool  # noqa: F401
         from tools.registry import registry
         entry = registry._tools["computer_use"]
-        if sys.platform != "darwin":
+        if sys.platform == "darwin":
+            # macOS: depends on cua-driver being installed
+            assert isinstance(entry.check_fn(), bool)
+        elif sys.platform.startswith("linux"):
+            # Linux: depends on xdotool + $DISPLAY
+            assert isinstance(entry.check_fn(), bool)
+        else:
+            # Other platforms: should be False
             assert entry.check_fn() is False
 
 

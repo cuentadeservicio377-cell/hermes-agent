@@ -77,17 +77,21 @@ _DESTRUCTIVE_ACTIONS = frozenset({
     "drag", "scroll", "type", "key", "set_value", "focus_app",
 })
 
-# Hard-blocked key combinations. Mirrored from #4562 — these are destructive
-# regardless of approval level (e.g. logout kills the session Hermes runs in).
+# Hard-blocked key combinations. These are destructive regardless of approval.
+# macOS-specific combos (converted to Linux equivalents where applicable).
 _BLOCKED_KEY_COMBOS = {
-    frozenset({"cmd", "shift", "backspace"}),   # empty trash
-    frozenset({"cmd", "option", "backspace"}),   # force delete
-    frozenset({"cmd", "ctrl", "q"}),             # lock screen
-    frozenset({"cmd", "shift", "q"}),            # log out
-    frozenset({"cmd", "option", "shift", "q"}),  # force log out
+    frozenset({"cmd", "shift", "backspace"}),   # empty trash (macOS)
+    frozenset({"cmd", "option", "backspace"}),   # force delete (macOS)
+    frozenset({"cmd", "ctrl", "q"}),             # lock screen (macOS)
+    frozenset({"cmd", "shift", "q"}),            # log out (macOS)
+    frozenset({"cmd", "option", "shift", "q"}),  # force log out (macOS)
+    # Linux-specific destructive combos
+    frozenset({"ctrl", "alt", "delete"}),        # reboot/shutdown (Linux)
+    frozenset({"ctrl", "shift", "e"}),           # kill terminal session
+    frozenset({"super", "shift", "q"}),          # force quit (some DEs)
 }
 
-_KEY_ALIASES = {"command": "cmd", "control": "ctrl", "alt": "option", "⌘": "cmd", "⌥": "option"}
+_KEY_ALIASES = {"command": "cmd", "control": "ctrl", "alt": "option", "⌘": "cmd", "⌥": "option", "win": "super", "windows": "super"}
 
 
 def _canon_key_combo(keys: str) -> frozenset:
@@ -130,10 +134,23 @@ def _get_backend() -> ComputerUseBackend:
     global _backend
     with _backend_lock:
         if _backend is None:
-            backend_name = os.environ.get("HERMES_COMPUTER_USE_BACKEND", "cua").lower()
-            if backend_name in {"cua", "cua-driver", ""}:
+            backend_name = os.environ.get("HERMES_COMPUTER_USE_BACKEND", "auto").lower()
+            if backend_name == "auto":
+                # Auto-detect platform
+                if sys.platform == "darwin":
+                    from tools.computer_use.cua_backend import CuaDriverBackend
+                    _backend = CuaDriverBackend()
+                elif sys.platform.startswith("linux"):
+                    from tools.computer_use.linux_backend import LinuxX11Backend
+                    _backend = LinuxX11Backend()
+                else:
+                    raise RuntimeError(f"computer_use not supported on {sys.platform}")
+            elif backend_name in {"cua", "cua-driver", ""}:
                 from tools.computer_use.cua_backend import CuaDriverBackend
                 _backend = CuaDriverBackend()
+            elif backend_name in {"linux", "linux-x11", "x11"}:
+                from tools.computer_use.linux_backend import LinuxX11Backend
+                _backend = LinuxX11Backend()
             elif backend_name == "noop":  # pragma: no cover
                 _backend = _NoopBackend()
             else:
@@ -251,7 +268,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     except Exception as e:
         return json.dumps({
             "error": f"computer_use backend unavailable: {e}",
-            "hint": "Run `hermes tools` and enable Computer Use to install cua-driver.",
+            "hint": "On macOS: run `hermes tools` and enable Computer Use to install cua-driver. On Linux: install xdotool (`sudo apt install xdotool wmctrl scrot`).",
         })
 
     try:
@@ -619,7 +636,7 @@ def _route_capture_through_aux_vision(
         temp_image_path.write_bytes(raw)
 
         prompt = (
-            "Describe what is visible in this macOS application screenshot in "
+            "Describe what is visible in this application screenshot in "
             "concise but specific terms. Mention the app name and window "
             "title if visible, the overall layout, any labelled buttons, "
             "menus or text fields, and any prominent text content the user "
@@ -736,12 +753,17 @@ def _element_to_dict(e: UIElement) -> Dict[str, Any]:
 def check_computer_use_requirements() -> bool:
     """Return True iff computer_use can run on this host.
 
-    Conditions: macOS + cua-driver binary installed (or override via env).
+    Conditions:
+      - macOS: cua-driver binary installed
+      - Linux: xdotool installed + $DISPLAY set (X11)
     """
-    if sys.platform != "darwin":
-        return False
-    from tools.computer_use.cua_backend import cua_driver_binary_available
-    return cua_driver_binary_available()
+    if sys.platform == "darwin":
+        from tools.computer_use.cua_backend import cua_driver_binary_available
+        return cua_driver_binary_available()
+    elif sys.platform.startswith("linux"):
+        from tools.computer_use.linux_backend import linux_backend_available
+        return linux_backend_available()
+    return False
 
 
 def get_computer_use_schema() -> Dict[str, Any]:
